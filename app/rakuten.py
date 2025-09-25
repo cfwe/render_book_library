@@ -27,12 +27,3 @@ async def get_book_market_price_from_rakuten(isbn: str) -> int | None:
         if data["count"] > 0 and "Items" in data and data["Items"]:
             return data["Items"][0]["Item"]["itemPrice"]
         return None
-    
-    
-    # 9784053049032, 550, 1320
-    # 4910066630553, 440, 1320
-    # 9784789846691, 3960, 3960
-    # 9784274233159, 4070, 6160
-    # 9784501117207, 3135, 3740
-    # 9784488025694, 1375, 1870
-    # 9784103330639, 550, 2090
