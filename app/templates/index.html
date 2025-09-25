@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>蔵書管理アプリ</title>
+    <style>
+        body { font-family: sans-serif; margin: 2em; }
+        .container { max-width: 800px; margin: auto; }
+        .form-group { margin-bottom: 1em; }
+        label { display: block; margin-bottom: 0.5em; }
+        input, button { padding: 0.5em; font-size: 1em; width: 100%; box-sizing: border-box; }
+        button { cursor: pointer; background-color: #007bff; color: white; border: none; }
+        .form-group button { margin-top: 0.5em; }
+        .status-message { margin-bottom: 1em; color: #dc3545; font-weight: bold; }
+        /* テーブル用のスタイル */
+        .book-table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+        .book-table th, .book-table td { border: 1px solid #ccc; padding: 0.8em; text-align: left; vertical-align: middle; }
+        .book-table th { background-color: #f2f2f2; }
+        .book-table td small { color: #555; font-size: 0.9em; }
+        .book-table td .primary-info { font-weight: bold; }
+        .book-table .price-cell .list-price-label { font-size: 0.8em; color: #666; }
+        .book-table .actions-cell { white-space: nowrap; }
+        .book-table .actions-cell button { width: auto; margin-right: 0.5em; padding: 0.4em 0.8em; }
+        .book-table .actions-cell button {
+            display: block;
+            width: 100%;
+            margin-bottom: 0.5em;
+            padding: 0.4em 0.8em;
+        }
+        .book-table .actions-cell button:last-child { margin-bottom: 0; }
+
+        /* モーダル用のスタイル */
+        .modal { display: none; position: fixed; z-index: 1; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.4); }
+        .modal-content { background-color: #fefefe; margin: 10% auto; padding: 20px; border: 1px solid #888; width: 80%; max-width: 500px; position: relative; }
+        .close-button { color: #aaa; position: absolute; top: 10px; right: 20px; font-size: 28px; font-weight: bold; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>蔵書管理アプリ</h1>
+
+        <form onsubmit="event.preventDefault(); addBook();" class="form-group">
+            <label for="isbn-lookup">ISBNコードで登録</label>
+            <input type="text" id="isbn-lookup" placeholder="ISBNコードを入力..." onblur="this.value = this.value.normalize('NFKC')">
+            <button type="submit">書籍情報を取得して登録</button>
+        </form>
+
+        <div id="lookup-status" class="status-message"></div>
+
+        <hr>
+
+        <div class="filters form-group">
+            <input type="text" id="keyword-search" placeholder="キーワードで絞り込み..." oninput="filterBooks()">
+            <select id="publisher-filter" onchange="filterBooks()" style="margin-top: 0.5em;">
+                <option value="">すべての出版社</option>
+            </select>
+        </div>
+
+        <h2>蔵書一覧</h2>
+        <table id="book-table" class="book-table">
+            <thead>
+                <tr>
+                    <th>書名 / ISBN</th>
+                    <th>著者 / 出版社</th>
+                    <th>価格 (中古/定価)</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody id="book-list-body">
+                {% for book in books %}
+                <tr class="book-item" id="book-{{ book.id }}">
+                    <td>
+                        <span class="primary-info">{{ book.title }}</span><br>
+                        <small>{{ book.isbn }}</small>
+                    </td>
+                    <td>
+                        <span class="author-name">{{ book.author or 'N/A' }}</span><br>
+                        <small class="publisher-name">{{ book.publisher or 'N/A' }}</small>
+                    </td>
+                    <td class="price-cell">
+                        <span id="market-price-{{ book.id }}">{{ book.market_price or 'N/A' }}</span>円<br>
+                        <small class="list-price-label">(定価 <span id="list-price-{{ book.id }}">{{ book.list_price or 'N/A' }}</span>円)</small>
+                    </td>
+                    <td class="actions-cell">
+                        <button onclick="updatePrices('{{ book.isbn }}', {{ book.id }}, this)">価格</button>
+                        <button onclick="editBook({{ book.id }})">変更</button>
+                        <button onclick="deleteBook({{ book.id }}, this)" style="background-color: #dc3545;">削除</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- 手動登録モーダル -->
+    <div id="manual-modal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" onclick="closeManualModal()">&times;</span>
+            <h3 id="modal-title">手動で登録</h3>
+            <form id="manual-add-form" onsubmit="handleFormSubmit(event)" class="form-group">
+                <input type="hidden" id="book-id-input" name="book_id">
+                <input type="text" name="isbn" placeholder="ISBN *" required>
+                <input type="text" name="title" placeholder="タイトル *" required style="margin-top: 0.5em;">
+                <input type="text" name="author" placeholder="著者" style="margin-top: 0.5em;">
+                <input type="text" name="publisher" placeholder="出版社" style="margin-top: 0.5em;">
+                <button type="submit">登録する</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        async function addBook() {
+            const isbnInput = document.getElementById('isbn-lookup');
+            const statusDiv = document.getElementById('lookup-status');
+            let isbn = isbnInput.value.trim();
+
+            statusDiv.textContent = ''; // 前のメッセージをクリア
+
+            if (!isbn) {
+                statusDiv.textContent = 'ISBNコードを入力してください。';
+                return;
+            }
+            // フロントエンド側で全角を半角に正規化する
+            isbn = isbn.normalize('NFKC');
+
+            try {
+                // 1. ISBNから書籍情報を取得
+                const lookupResponse = await fetch(`/api/lookup_book/${isbn}`);
+
+                // 404 Not Foundの場合、手動登録モーダルを開く
+                if (lookupResponse.status === 404) {
+                    statusDiv.textContent = `ISBN: ${isbn} の書籍情報が見つかりませんでした。手動で入力してください。`;
+                    const manualIsbnInput = document.querySelector('#manual-add-form input[name="isbn"]');
+                    if (manualIsbnInput) {
+                        manualIsbnInput.value = isbn;
+                    }
+                    openManualModal(true); // モーダルを開き、タイトルにフォーカス
+                    return; // 処理を終了
+                }
+
+                if (!lookupResponse.ok) {
+                    const errorData = await lookupResponse.json();
+                    throw new Error(errorData.detail || '書籍情報の取得に失敗しました。');
+                }
+                const bookData = await lookupResponse.json();
+
+                // 2. 取得した情報で書籍をDBに登録
+                const createResponse = await fetch('/api/books/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bookData),
+                });
+
+                if (!createResponse.ok) {
+                    const errorData = await createResponse.json();
+                    throw new Error(errorData.detail || '書籍の登録に失敗しました。');
+                }
+                const newBook = await createResponse.json();
+
+                addBookToList(newBook); // この関数はボタン付きのHTMLを生成する
+                isbnInput.value = ''; // 入力欄をクリア
+            } catch (error) {
+                statusDiv.textContent = `エラー: ${error.message}`;
+            }
+        }
+
+        async function handleFormSubmit(event) {
+            event.preventDefault(); // フォームのデフォルト送信をキャンセル
+            const form = document.getElementById('manual-add-form');
+            const formData = new FormData(form);
+            const bookDataObject = Object.fromEntries(formData.entries());
+            const bookId = bookDataObject.book_id;
+
+            // ISBNが存在する場合、送信前に正規化する
+            if (bookDataObject.isbn) {
+                bookDataObject.isbn = bookDataObject.isbn.normalize('NFKC');
+            }
+
+            let url = '/api/books/';
+            let method = 'POST';
+
+            // bookIdがあれば更新、なければ新規作成
+            if (bookId) {
+                url = `/api/books/${bookId}`;
+                method = 'PUT';
+                // 更新APIはisbnとbook_idをボディに含めない
+                delete bookDataObject.isbn;
+                delete bookDataObject.book_id;
+            }
+
+            try {
+                const response = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bookDataObject),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || '処理に失敗しました。');
+                }
+                const resultBook = await response.json();
+
+                if (bookId) {
+                    // 更新の場合
+                    updateBookInList(resultBook);
+                } else {
+                    // 新規作成の場合
+                    addBookToList(resultBook);
+                }
+
+                document.getElementById('lookup-status').textContent = ''; // エラーメッセージをクリア
+                closeManualModal();
+                form.reset(); // フォームをクリア
+            } catch (error) {
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
+        async function deleteBook(bookId, element) {
+            if (!confirm('この書籍を削除しますか？')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/books/${bookId}`, { method: 'DELETE' });
+                if (!response.ok && response.status !== 204) {
+                     throw new Error('削除に失敗しました。');
+                }
+                // 成功したら画面から要素を削除
+                const listItem = document.getElementById(`book-${bookId}`);
+                if (listItem) {
+                    listItem.remove();
+                }
+            } catch (error) {
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
+        async function editBook(bookId) {
+            try {
+                // 1. GETリクエストで編集対象の書籍情報を取得
+                const response = await fetch(`/api/books/${bookId}`);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || '書籍情報の取得に失敗しました。');
+                }
+                const book = await response.json();
+
+                // 2. フォームにデータを設定
+                document.getElementById('modal-title').textContent = '書籍情報を変更';
+                const form = document.getElementById('manual-add-form');
+                form.querySelector('#book-id-input').value = book.id;
+                form.querySelector('input[name="isbn"]').value = book.isbn;
+                form.querySelector('input[name="isbn"]').readOnly = true; // ISBNは変更不可
+                form.querySelector('input[name="title"]').value = book.title;
+                form.querySelector('input[name="author"]').value = book.author || '';
+                form.querySelector('input[name="publisher"]').value = book.publisher || '';
+                
+                // 3. モーダルを開く
+                openManualModal(); 
+            } catch (error) {
+                alert(`エラー: ${error.message}`);
+            }
+        }
+
+        async function updatePrices(isbn, bookId, element) {
+            const listPriceSpan = document.getElementById(`list-price-${bookId}`);
+            const marketPriceSpan = document.getElementById(`market-price-${bookId}`);
+            listPriceSpan.textContent = '調査中...';
+            marketPriceSpan.textContent = '調査中...';
+            element.disabled = true;
+
+            try {
+                const response = await fetch(`/api/books/${isbn}/update_prices`);
+                if (!response.ok) {
+                    throw new Error('価格の更新に失敗しました。');
+                }
+                const data = await response.json();
+                listPriceSpan.textContent = data.list_price ? `${data.list_price}円` : '取得不可';
+                marketPriceSpan.textContent = data.market_price ? `${data.market_price}円` : '取得不可';
+            } catch (error) {
+                listPriceSpan.textContent = 'エラー';
+                marketPriceSpan.textContent = 'エラー';
+                alert(error.message);
+            } finally {
+                // 3秒後にボタンを再度有効にする（APIの連続呼び出しを防ぐため）
+                setTimeout(() => { element.disabled = false; }, 3000);
+            }
+        }
+
+        function openManualModal(focusOnTitle = false) {
+            // モーダルを表示する
+            document.getElementById('manual-modal').style.display = 'block';
+            if (focusOnTitle) {
+                // 少し遅延させないとフォーカスが当たらない場合がある
+                setTimeout(() => {
+                    document.querySelector('#manual-add-form input[name="title"]').focus();
+                }, 100);
+            }
+        }
+
+        function closeManualModal() {
+            document.getElementById('manual-modal').style.display = 'none';
+        }
+
+        function resetAndOpenManualModal(focusOnTitle = false) {
+            resetModalForm();
+            openManualModal(focusOnTitle);
+        }
+
+        // モーダルの外側をクリックしたら閉じる
+        window.onclick = function(event) {
+            const modal = document.getElementById('manual-modal');
+            if (event.target == modal) {
+                closeManualModal();
+            }
+        }
+
+        function resetModalForm() {
+            document.getElementById('modal-title').textContent = '手動で登録';
+            const form = document.getElementById('manual-add-form');
+            form.reset();
+            form.querySelector('#book-id-input').value = '';
+            form.querySelector('input[name="isbn"]').readOnly = false;
+        }
+
+        function addBookToList(book) {
+            const tableBody = document.getElementById('book-list-body');
+            const newRow = tableBody.insertRow(0); // 先頭に行を挿入
+            newRow.className = 'book-item';
+            newRow.id = `book-${book.id}`;
+            newRow.innerHTML = `<td><span class="primary-info">${book.title}</span><br><small>${book.isbn}</small></td><td><span class="author-name">${book.author || 'N/A'}</span><br><small class="publisher-name">${book.publisher || 'N/A'}</small></td><td class="price-cell"><span id="market-price-${book.id}">${book.market_price || 'N/A'}</span>円<br><small class="list-price-label">(定価 <span id="list-price-${book.id}">${book.list_price || 'N/A'}</span>円)</small></td><td class="actions-cell"><button onclick="updatePrices('${book.isbn}', ${book.id}, this)">価格</button><button onclick="editBook(${book.id})">変更</button><button onclick="deleteBook(${book.id}, this)" style="background-color: #dc3545;">削除</button></td>`;
+            updatePublisherFilter(); // 出版社フィルタを更新
+        }
+
+        function updateBookInList(book) {
+            const row = document.getElementById(`book-${book.id}`);
+            if (row) {
+                row.innerHTML = `<td><span class="primary-info">${book.title}</span><br><small>${book.isbn}</small></td><td><span class="author-name">${book.author || 'N/A'}</span><br><small class="publisher-name">${book.publisher || 'N/A'}</small></td><td class="price-cell"><span id="market-price-${book.id}">${book.market_price || 'N/A'}</span>円<br><small class="list-price-label">(定価 <span id="list-price-${book.id}">${book.list_price || 'N/A'}</span>円)</small></td><td class="actions-cell"><button onclick="updatePrices('${book.isbn}', ${book.id}, this)">価格</button><button onclick="editBook(${book.id})">変更</button><button onclick="deleteBook(${book.id}, this)" style="background-color: #dc3545;">削除</button></td>`;
+                updatePublisherFilter(); // 出版社フィルタを更新
+            }
+        }
+
+        function filterBooks() {
+            const keyword = document.getElementById('keyword-search').value.toLowerCase();
+            const selectedPublisher = document.getElementById('publisher-filter').value;
+            const bookItems = document.querySelectorAll('#book-list-body .book-item');
+
+            bookItems.forEach(item => {
+                const title = item.querySelector('.primary-info').textContent.toLowerCase();
+                const author = item.querySelector('.author-name').textContent.toLowerCase();
+                const publisher = item.querySelector('.publisher-name').textContent;
+
+                const keywordMatch = (keyword === '') || title.includes(keyword) || author.includes(keyword);
+                const publisherMatch = (selectedPublisher === '') || publisher === selectedPublisher;
+
+                if (keywordMatch && publisherMatch) {
+                    item.style.display = ''; // 'table-row'
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        function updatePublisherFilter() {
+            const publisherFilter = document.getElementById('publisher-filter');
+            const existingPublishers = new Set(Array.from(publisherFilter.options).map(opt => opt.value));
+            const currentPublishers = new Set();
+
+            document.querySelectorAll('.publisher-name').forEach(span => {
+                const name = span.textContent.trim();
+                if (name && name !== 'N/A') {
+                    currentPublishers.add(name);
+                }
+            });
+
+            currentPublishers.forEach(name => {
+                if (!existingPublishers.has(name)) {
+                    const option = document.createElement('option');
+                    option.value = name;
+                    option.textContent = name;
+                    publisherFilter.appendChild(option);
+                }
+            });
+        }
+
+        // ページ読み込み時に出版社フィルタを初期化
+        document.addEventListener('DOMContentLoaded', updatePublisherFilter);
+    </script>
+</body>
+</html>
