@@ -1,0 +1,19 @@
+# Git
+.git
+.gitignore
+
+# Docker
+docker-compose.yml
+
+# Python cache and virtual environment
+__pycache__/
+*.pyc
+.venv
+
+# Environment variables and editor settings
+.env
+.vscode/
+
+# Documentation and images
+README.md
+image/
