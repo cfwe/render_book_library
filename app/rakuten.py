@@ -28,6 +28,7 @@ async def get_book_market_price_from_rakuten(isbn: str) -> int | None:
             return data["Items"][0]["Item"]["itemPrice"]
         return None
     
+    
     # 9784053049032, 550, 1320
     # 4910066630553, 440, 1320
     # 9784789846691, 3960, 3960
