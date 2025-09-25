@@ -1,0 +1,32 @@
+# Renderのインフラ構成を定義するファイル (Blueprint)
+services:
+  # 1. PostgreSQLデータベースの定義
+  - type: psql
+    name: library-manager-db
+    # 無料枠を利用します。
+    plan: free
+
+  # 2. FastAPIバックエンドのWebサービスの定義
+  - type: web
+    name: library-manager-backend
+    # 無料枠を利用します。
+    plan: free
+    # リポジトリ内のDockerfileを使ってビルドします。
+    env: docker
+
+    # ビルド完了後、アプリケーション起動前に実行するコマンドです。
+    # ここでデータベースのマイグレーションを実行します。
+    buildCommand: "alembic upgrade head"
+
+    # アプリケーションを起動するコマンドです。
+    # Renderの仕様に合わせて、ホスト0.0.0.0、ポート10000で起動します。
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port 10000"
+
+    # 環境変数の設定
+    envVars:
+      # DATABASE_URLは、上で定義したDBから自動で設定されます。
+      - key: DATABASE_URL
+        fromDatabase:
+          name: library-manager-db
+          property: internalUrl
+
